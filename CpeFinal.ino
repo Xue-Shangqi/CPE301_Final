@@ -5,10 +5,16 @@
 #include <LiquidCrystal.h>
 #include <DHT.h>
 #include <RTClib.h>
+#include <Stepper.h>
 
 #define RDA 0x80
 #define TBE 0x20
 RTC_DS1307 rtc;
+
+const int stepsPerRevolution = 2038;  // change this to fit the number of steps per revolution
+
+// initialize the stepper library on pins 8 through 11:
+Stepper myStepper(stepsPerRevolution, 8,10,9,11);
 
 // UART Pointers
 volatile unsigned char *myUCSR0A  = (unsigned char *)0x00C0;
@@ -22,6 +28,30 @@ volatile unsigned char *ddr_b     = (unsigned char*) 0x24;
 volatile unsigned char *portE     = (unsigned char*) 0x2E;
 volatile unsigned char *ddr_e     = (unsigned char*) 0x2D;
 volatile unsigned char *pin_e     = (unsigned char*) 0x2C;
+
+//Water Sensor Pointers: Analog pin 0
+//volatile unsigned char 
+//volatile unsigned char
+
+//Motor Pointers:
+  //volatile unsigned char        input 1 port  
+//volatile unsigned char        input 1 ddr 
+//volatile unsigned char        input 1 pin 
+  //volatile unsigned char        input 2 port
+//volatile unsigned char        input 2 ddr
+//volatile unsigned char        input 2 pin
+  //volatile unsigned char        input 3
+//volatile unsigned char        input 3 port
+//volatile unsigned char        input 3 ddr
+//volatile unsigned char        input 3 pin
+//volatile unsigned char        input 4 port
+//volatile unsigned char        input 4 ddr
+//volatile unsigned char        input 4 pin
+  //will use pot to control speed
+//volatile unsigned char        potentiometer port
+//volatile unsigned char        potentiometer ddr
+//volatile unsigned char        potentiometer pin
+
 
 // Timer Pointers
 volatile unsigned char *myTCCR1A  = (unsigned char *) 0x80;
@@ -90,25 +120,34 @@ void loop()
   }
 
   switch(state){
-    case 1:
+    case 1://idle
       temperature = dht.readTemperature();
       
       //change LED to green
       *portB &= !0x01 << 5;
       *portB |= 0x01 << 6;
       *portB &= !0x01 << 7;
-      break;
-    case 2:
+
+      //delay(1000); for motor to have time to change; need to change this to funky delay
+      //myStepper.setSpeed(adc_read(potentiometer pin));
 
       break;
-    case 3:
+    case 2://running
+    
+      //delay(1000); for motor to have time to change
+      //myStepper.setSpeed(adc_read(potentiometer pin));
+      break;
+    case 3://error
 
       //change LED to red
       *portB &= !0x01 << 5;
       *portB &= !0x01 << 6;
       *portB |= 0x01 << 7;
+      
+      //delay(1000); for motor to have time to change
+      //myStepper.setSpeed(adc_read(potentiometer pin));
       break;
-    case 0:
+    case 0://disabled
 
       //change LED to yellow 
       *portB &= !0x01 << 5;
