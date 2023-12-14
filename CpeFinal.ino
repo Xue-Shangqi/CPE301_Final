@@ -1,5 +1,5 @@
 //UNR CPE 301 Final
-//Hunter Arends, Shang, Miguel
+//Hunter Arends, Shangqi Xue, Miguel
 //12/2/2023
 
 #include <LiquidCrystal.h>
@@ -9,12 +9,13 @@
 
 #define RDA 0x80
 #define TBE 0x20
+#define threshold 26
 RTC_DS1307 rtc;
 
 const int stepsPerRevolution = 2038;  // change this to fit the number of steps per revolution
 
-// initialize the stepper library on pins 8 through 11:
-Stepper myStepper(stepsPerRevolution, 8,10,9,11);
+// initialize the stepper library on pins :
+Stepper myStepper(stepsPerRevolution, 47,45,43,41);
 
 // UART Pointers
 volatile unsigned char *myUCSR0A  = (unsigned char *)0x00C0;
@@ -29,29 +30,11 @@ volatile unsigned char *portE     = (unsigned char*) 0x2E;
 volatile unsigned char *ddr_e     = (unsigned char*) 0x2D;
 volatile unsigned char *pin_e     = (unsigned char*) 0x2C;
 
-//Water Sensor Pointers: Analog pin 0
-//volatile unsigned char 
-//volatile unsigned char
-
-//Motor Pointers:
-  //volatile unsigned char        input 1 port  
-//volatile unsigned char        input 1 ddr 
-//volatile unsigned char        input 1 pin 
-  //volatile unsigned char        input 2 port
-//volatile unsigned char        input 2 ddr
-//volatile unsigned char        input 2 pin
-  //volatile unsigned char        input 3
-//volatile unsigned char        input 3 port
-//volatile unsigned char        input 3 ddr
-//volatile unsigned char        input 3 pin
-//volatile unsigned char        input 4 port
+//Fan Moter:
+  //volatile unsigned char        input 4 port
 //volatile unsigned char        input 4 ddr
 //volatile unsigned char        input 4 pin
-  //will use pot to control speed
-//volatile unsigned char        potentiometer port
-//volatile unsigned char        potentiometer ddr
-//volatile unsigned char        potentiometer pin
-
+//will use pot to control angle: using Analog 8
 
 // Timer Pointers
 volatile unsigned char *myTCCR1A  = (unsigned char *) 0x80;
@@ -67,10 +50,9 @@ volatile unsigned char* my_ADCSRA = (unsigned char*) 0x7A;
 volatile unsigned int* my_ADC_DATA = (unsigned int*) 0x78;
 
 //global variables
-double temperature = -1;
-double humidity = -1;
-double waterlevel = -1;
-int prevState = 0;
+double waterlevel = -1, temp = -1, hum = -1;
+int prevState = 0, delayCount = 11250;
+int prevPotState = 0;
 
 //state of the refrigerator
 enum State{
@@ -79,12 +61,14 @@ enum State{
   running = 2,
   error = 3
 };
-
 State state = disabled;
 
 //setup temperature sensor
 DHT dht(2, DHT11);
 
+//LCD pin used
+const int rs = 10, en = 9, d4 = 8, d5 = 7, d6 = 6, d7 = 5;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 
 //global ticks counter
 void setup() 
@@ -93,56 +77,102 @@ void setup()
   *ddr_e &= 0xDF;
   *portE |= 0x20;
 
-
   // set PB5,6,7 (RGB) to output
+  *ddr_b |= 0x01;
   *ddr_b |= 0x20;
   *ddr_b |= 0x40;
   *ddr_b |= 0x80;
 
+  //interrupt for the start/stop button 
+  attachInterrupt(digitalPinToInterrupt(3), start, RISING);
 
-  // setup the Timer for Normal Mode, with the TOV interrupt enabled
-  //setup_timer_regs();
-  // Start the UART
+  //Start the UART
   U0Init(9600);
   //setup the ADC
   adc_init();
-  //Serial.begin(9600);
+  //real time clock setup
   rtc.begin();
   rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  attachInterrupt(digitalPinToInterrupt(3), start, RISING);
+  //setup for the temperature sensor
+  dht.begin();
+  //setup for LCD
+  lcd.begin(16,2);
 }
 
 void loop() 
 {
+  DateTime now = rtc.now();
   if(state != prevState){
-    displayTimeStamp();
+    displayTimeStamp(now);
     prevState = state;
   }
 
+  int potState = adc_read(A8);
+  myStepper.step(potState - prevPotState);
+
   switch(state){
     case 1://idle
-      temperature = dht.readTemperature();
+      //updates temp/hum and display them on LCD
+      temp = dht.readTemperature();
+      hum = dht.readHumidity();
+      my_delay(125);
+      delayCount++;
+      if(delayCount >= 11250){
+        displayTempAndHum();
+        delayCount = 0;
+      }
+
+      if(temp > threshold){
+        state = running;
+      }
       
       //change LED to green
-      *portB &= !0x01 << 5;
-      *portB |= 0x01 << 6;
-      *portB &= !0x01 << 7;
-
+      *portB &= ~(0x01 << 0);
+      *portB &= ~(0x01 << 5);
+      *portB |= (0x01 << 6);
+      *portB &= ~(0x01 << 7);
       //delay(1000); for motor to have time to change; need to change this to funky delay
       //myStepper.setSpeed(adc_read(potentiometer pin));
 
       break;
     case 2://running
-    
+      //updates and displays temp and hum to LCD
+      temp = dht.readTemperature();
+      hum = dht.readHumidity();
+      my_delay(125);
+      delayCount++;
+      if(delayCount >= 11250){
+        displayTempAndHum();
+        delayCount = 0;
+      }
+
+      if(temp <= threshold){
+        state = idle;
+      }
+
+      //change LED to blue
+      *portB &= ~(0x01 << 0);
+      *portB |= (0x01 << 5);
+      *portB &= ~(0x01 << 6);
+      *portB &= ~(0x01 << 7);
       //delay(1000); for motor to have time to change
       //myStepper.setSpeed(adc_read(potentiometer pin));
       break;
     case 3://error
+      temp = dht.readTemperature();
+      hum = dht.readHumidity();
+      my_delay(125);
+      delayCount++;
+      if(delayCount >= 11250){
+        displayTempAndHum();
+        delayCount = 0;
+      }
 
       //change LED to red
-      *portB &= !0x01 << 5;
-      *portB &= !0x01 << 6;
-      *portB |= 0x01 << 7;
+      *portB &= ~(0x01 << 0);
+      *portB &= ~(0x01 << 5);
+      *portB &= ~(0x01 << 6);
+      *portB |= (0x01 << 7);
       
       //delay(1000); for motor to have time to change
       //myStepper.setSpeed(adc_read(potentiometer pin));
@@ -150,12 +180,13 @@ void loop()
     case 0://disabled
 
       //change LED to yellow 
-      *portB &= !0x01 << 5;
-      *portB |= 0x01 << 6;
-      *portB |= 0x01 << 7;
+      *portB |= (0x01 << 0);
+      *portB &= ~(0x01 << 5);
+      *portB &= ~(0x01 << 6);
+      *portB &= ~(0x01 << 7);
       break;
   }
-
+  prevPotState = potState;
 }
 
 void start(){
@@ -240,11 +271,43 @@ unsigned int adc_read(unsigned char adc_channel_num)
   return *my_ADC_DATA;
 }
 
-void displayTimeStamp(){
-  DateTime now = rtc.now();
+void my_delay(unsigned int freq)
+{
+  // calc period
+  double period = 1.0/double(freq);
+  // 50% duty cycle
+  double half_period = period/ 2.0f;
+  // clock period def
+  double clk_period = 0.0000000625;
+  // calc ticks
+  unsigned int ticks = half_period / clk_period;
+  // stop the timer
+  *myTCCR1B &= 0xF8;
+  // set the counts
+  *myTCNT1 = (unsigned int) (65536 - ticks);
+  // start the timer
+  * myTCCR1A = 0x0;
+  * myTCCR1B |= 0b00000001;
+  // wait for overflow
+  while((*myTIFR1 & 0x01)==0); // 0b 0000 0000
+  // stop the timer
+  *myTCCR1B &= 0xF8;   // 0b 0000 0000
+  // reset TOV           
+  *myTIFR1 |= 0x01;
+}
+
+void displayTimeStamp(DateTime now){
   String date;
   date = now.toString("YYYY-MM-DD hh:mm:ss");
   for(int i=0; i<date.length(); ++i){
     U0putChar(date[i]);
   }
+  U0putChar('\n');
+}
+
+void displayTempAndHum(){
+  lcd.setCursor(0,0);
+  lcd.print("Temp: " + (String)temp + char(223) + "C");
+  lcd.setCursor(0,1);
+  lcd.print("Humidity: " + (String)hum);
 }
