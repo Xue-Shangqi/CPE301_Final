@@ -1,5 +1,5 @@
 //UNR CPE 301 Final
-//Hunter Arends, Shangqi Xue, Miguel
+//Hunter Arends, Shangqi Xue, Miguel Rivera Villareal, Eadrian Carreon
 //12/2/2023
 
 #include <LiquidCrystal.h>
