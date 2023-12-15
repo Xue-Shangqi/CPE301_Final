@@ -9,13 +9,13 @@
 
 #define RDA 0x80
 #define TBE 0x20
-#define threshold 26
+#define threshold 27
 RTC_DS1307 rtc;
 
 const int stepsPerRevolution = 2038;  // change this to fit the number of steps per revolution
 
 // initialize the stepper library on pins :
-Stepper myStepper(stepsPerRevolution, 47,45,43,41);
+Stepper myStepper(stepsPerRevolution, 4,44,45,46);
 
 // UART Pointers
 volatile unsigned char *myUCSR0A  = (unsigned char *)0x00C0;
@@ -29,6 +29,12 @@ volatile unsigned char *ddr_b     = (unsigned char*) 0x24;
 volatile unsigned char *portE     = (unsigned char*) 0x2E;
 volatile unsigned char *ddr_e     = (unsigned char*) 0x2D;
 volatile unsigned char *pin_e     = (unsigned char*) 0x2C;
+volatile unsigned char *portC     = (unsigned char*) 0x28;
+volatile unsigned char *ddr_c     = (unsigned char*) 0x27;
+volatile unsigned char *pin_c     = (unsigned char*) 0x26;
+volatile unsigned char *portD     = (unsigned char*) 0x2B;
+volatile unsigned char *ddr_d     = (unsigned char*) 0x2A;
+volatile unsigned char *pin_d     = (unsigned char*) 0x29;
 
 //Fan Moter:
   //volatile unsigned char        input 4 port
@@ -73,9 +79,16 @@ LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 //global ticks counter
 void setup() 
 { 
-  //set PE5 (start button) to input             
-  *ddr_e &= 0xDF;
-  *portE |= 0x20;
+  //set PE5 (fan) to output             
+  *ddr_e |= 0x20;
+
+  //set PC0 to (reset button) input
+  *ddr_c &= ~(0x01);
+  *portC &= ~(0x01);
+
+  //set PB2 (start button) to input
+  *ddr_d &= ~(0x01 << 3); 
+  *portD |= 0x01 << 3;
 
   // set PB5,6,7 (RGB) to output
   *ddr_b |= 0x01;
@@ -84,7 +97,7 @@ void setup()
   *ddr_b |= 0x80;
 
   //interrupt for the start/stop button 
-  attachInterrupt(digitalPinToInterrupt(3), start, RISING);
+  attachInterrupt(digitalPinToInterrupt(18), start, RISING);
 
   //Start the UART
   U0Init(9600);
@@ -97,19 +110,31 @@ void setup()
   dht.begin();
   //setup for LCD
   lcd.begin(16,2);
+  //set motor speed 
+  myStepper.setSpeed(10);
+  
 }
 
 void loop() 
 {
+  //reset the state
+  if((*pin_c & 0x01) && state == error){
+    state = idle;
+  }
+
+  //display change of state
   DateTime now = rtc.now();
   if(state != prevState){
     displayTimeStamp(now);
     prevState = state;
   }
 
-  int potState = adc_read(A8);
-  myStepper.step(potState - prevPotState);
+  //control stepper motor 
+  int potState = adc_read(8);
+  myStepper.step(potState-prevPotState);
 
+
+  //change what states do 
   switch(state){
     case 1://idle
       //updates temp/hum and display them on LCD
@@ -122,8 +147,14 @@ void loop()
         delayCount = 0;
       }
 
+      //change state base on temperature
       if(temp > threshold){
         state = running;
+      }
+
+      //change state base on water level
+      if(waterlevel <= -2){
+        state = error;
       }
       
       //change LED to green
@@ -146,10 +177,21 @@ void loop()
         delayCount = 0;
       }
 
+      //start the fan
+      *portE |= (0x01 << 5);
+
+      //change state base on temperature
       if(temp <= threshold){
         state = idle;
+        *portE &= ~(0x01 << 5);
       }
 
+      //change state base on water level
+      if(waterlevel < -2){
+        state = error;
+        *portE &= ~(0x01 << 5);
+      }
+      
       //change LED to blue
       *portB &= ~(0x01 << 0);
       *portB |= (0x01 << 5);
@@ -167,6 +209,8 @@ void loop()
         displayTempAndHum();
         delayCount = 0;
       }
+      
+
 
       //change LED to red
       *portB &= ~(0x01 << 0);
@@ -175,7 +219,6 @@ void loop()
       *portB |= (0x01 << 7);
       
       //delay(1000); for motor to have time to change
-      //myStepper.setSpeed(adc_read(potentiometer pin));
       break;
     case 0://disabled
 
