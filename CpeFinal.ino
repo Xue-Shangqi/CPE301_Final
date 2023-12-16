@@ -1,5 +1,5 @@
 //UNR CPE 301 Final
-//Hunter Arends, Shangqi Xue, Miguel Rivera Villareal, Eadrian Carreon
+//Hunter Arends, Shangqi Xue, Miguel
 //12/2/2023
 
 #include <LiquidCrystal.h>
@@ -9,7 +9,7 @@
 
 #define RDA 0x80
 #define TBE 0x20
-#define threshold 27
+#define threshold 28
 RTC_DS1307 rtc;
 
 const int stepsPerRevolution = 2038;  // change this to fit the number of steps per revolution
@@ -35,13 +35,6 @@ volatile unsigned char *pin_c     = (unsigned char*) 0x26;
 volatile unsigned char *portD     = (unsigned char*) 0x2B;
 volatile unsigned char *ddr_d     = (unsigned char*) 0x2A;
 volatile unsigned char *pin_d     = (unsigned char*) 0x29;
-
-//Fan Moter:
-  //volatile unsigned char        input 4 port
-//volatile unsigned char        input 4 ddr
-//volatile unsigned char        input 4 pin
-//will use pot to control angle: using Analog 8
-
 // Timer Pointers
 volatile unsigned char *myTCCR1A  = (unsigned char *) 0x80;
 volatile unsigned char *myTCCR1B  = (unsigned char *) 0x81;
@@ -56,9 +49,9 @@ volatile unsigned char* my_ADCSRA = (unsigned char*) 0x7A;
 volatile unsigned int* my_ADC_DATA = (unsigned int*) 0x78;
 
 //global variables
-double waterlevel = -1, temp = -1, hum = -1;
-int prevState = 0, delayCount = 11250;
-int prevPotState = 0;
+double waterLevel = -1, temp = -1, hum = -1;
+int prevState = 0, delayCount = 11250, prevPotState = 0;
+bool needClear = true;
 
 //state of the refrigerator
 enum State{
@@ -112,27 +105,34 @@ void setup()
   lcd.begin(16,2);
   //set motor speed 
   myStepper.setSpeed(10);
-  
+
+  Serial.begin(9600);
 }
 
 void loop() 
 {
-  //reset the state
-  if((*pin_c & 0x01) && state == error){
-    state = idle;
+  //control stepper motor and display if position changed
+  int potState = adc_read(5);
+  myStepper.step(potState-prevPotState);
+  if(!(potState >= prevPotState-100 &&  potState <= prevPotState+100)){
+    String potDisplay = "Potentiometer position changed at: ";
+    for(int i = 0; i < potDisplay.length(); ++i){
+      U0putChar(potDisplay[i]);
+    }
+    DateTime now = rtc.now(); 
+    String date;
+    date = now.toString("YYYY-MM-DD hh:mm:ss");
+    for(int i = 0; i < date.length(); ++i){
+      U0putChar(date[i]);
+    }
+    U0putChar('\n');
   }
 
   //display change of state
-  DateTime now = rtc.now();
   if(state != prevState){
-    displayTimeStamp(now);
+    displayTimeStamp();
     prevState = state;
   }
-
-  //control stepper motor 
-  int potState = adc_read(8);
-  myStepper.step(potState-prevPotState);
-
 
   //change what states do 
   switch(state){
@@ -147,14 +147,19 @@ void loop()
         delayCount = 0;
       }
 
+      //update water level
+      waterLevel = adc_read(0);
+
       //change state base on temperature
       if(temp > threshold){
         state = running;
+        needClear = true;
       }
 
       //change state base on water level
-      if(waterlevel <= -2){
+      if(waterLevel <= 100){
         state = error;
+        needClear = true;
       }
       
       //change LED to green
@@ -162,8 +167,6 @@ void loop()
       *portB &= ~(0x01 << 5);
       *portB |= (0x01 << 6);
       *portB &= ~(0x01 << 7);
-      //delay(1000); for motor to have time to change; need to change this to funky delay
-      //myStepper.setSpeed(adc_read(potentiometer pin));
 
       break;
     case 2://running
@@ -175,7 +178,11 @@ void loop()
       if(delayCount >= 11250){
         displayTempAndHum();
         delayCount = 0;
-      }
+      } 
+
+      //update water level
+      waterLevel = adc_read(0);
+
 
       //start the fan
       *portE |= (0x01 << 5);
@@ -184,12 +191,14 @@ void loop()
       if(temp <= threshold){
         state = idle;
         *portE &= ~(0x01 << 5);
+        needClear = true;
       }
 
       //change state base on water level
-      if(waterlevel < -2){
+      if(waterLevel < 100){
         state = error;
         *portE &= ~(0x01 << 5);
+        needClear = true;
       }
       
       //change LED to blue
@@ -197,28 +206,33 @@ void loop()
       *portB |= (0x01 << 5);
       *portB &= ~(0x01 << 6);
       *portB &= ~(0x01 << 7);
-      //delay(1000); for motor to have time to change
-      //myStepper.setSpeed(adc_read(potentiometer pin));
       break;
     case 3://error
-      temp = dht.readTemperature();
-      hum = dht.readHumidity();
-      my_delay(125);
-      delayCount++;
-      if(delayCount >= 11250){
-        displayTempAndHum();
-        delayCount = 0;
+      //prints error message 
+      if(needClear){
+        lcd.clear();
+        needClear = false;
       }
-      
 
+      lcd.setCursor(0, 0);
+      lcd.print("Water level is");
+      lcd.setCursor(0, 1);
+      lcd.print("too low!");
+
+      //reset the state
+      if((*pin_c & 0x01)){
+        state = idle;
+        needClear = true;
+        temp = dht.readTemperature();
+        hum = dht.readHumidity();
+        displayTempAndHum();
+      }
 
       //change LED to red
       *portB &= ~(0x01 << 0);
       *portB &= ~(0x01 << 5);
       *portB &= ~(0x01 << 6);
       *portB |= (0x01 << 7);
-      
-      //delay(1000); for motor to have time to change
       break;
     case 0://disabled
 
@@ -236,6 +250,10 @@ void start(){
   if(state == disabled){
     state = idle;
   }else{
+    *portE &= ~(0x01 << 5);
+    if(state == idle){
+      displayTimeStamp();
+    }
     state = disabled;
   }
 }
@@ -339,16 +357,21 @@ void my_delay(unsigned int freq)
   *myTIFR1 |= 0x01;
 }
 
-void displayTimeStamp(DateTime now){
+void displayTimeStamp(){
+  DateTime now = rtc.now(); 
   String date;
   date = now.toString("YYYY-MM-DD hh:mm:ss");
-  for(int i=0; i<date.length(); ++i){
+  for(int i = 0; i < date.length(); ++i){
     U0putChar(date[i]);
   }
   U0putChar('\n');
 }
 
 void displayTempAndHum(){
+  if(needClear){
+    lcd.clear();
+    needClear = false;
+  }
   lcd.setCursor(0,0);
   lcd.print("Temp: " + (String)temp + char(223) + "C");
   lcd.setCursor(0,1);
