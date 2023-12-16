@@ -105,8 +105,6 @@ void setup()
   lcd.begin(16,2);
   //set motor speed 
   myStepper.setSpeed(10);
-
-  Serial.begin(9600);
 }
 
 void loop() 
